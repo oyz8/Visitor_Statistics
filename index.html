@@ -157,7 +157,7 @@ input[type=text],input[type=date],select{padding:8px 11px;font-size:13px;backgro
 input[type=text]{width:100%}
 input:focus,select:focus{border-color:var(--input-focus);box-shadow:0 0 0 3px var(--primary-glow)}
 .url-txt{padding:7px 10px;background:var(--primary-glow);border-radius:7px;color:var(--primary-strong);font-size:12px;font-family:'JetBrains Mono',monospace}
-.img-cell{display:flex;gap:10px;align-items:center;min-width:220px}
+.img-cell{display:flex;gap:10px;align-items:center}
 .thumb{width:56px;height:56px;flex-shrink:0;border-radius:10px;border:1.5px solid var(--panel-border);background:var(--table-row-hover) center/contain no-repeat;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:20px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
 .thumb::after{content:"+";font-size:22px;opacity:.5}
 .thumb.has-img::after{content:""}
@@ -201,35 +201,90 @@ img.thumb::after{content:none}
 @keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}
 .github-corner.hidden{display:none !important}
 
+/* ============ 桌面端表格布局修复 ============ */
 @media (min-width: 769px) {
-  #page-images .table-wrap { max-height: none; overflow-x: auto; }
-  #page-images table { table-layout: fixed !important; min-width: 0 !important; width: 100% !important; }
-  #page-images th:nth-child(1), #page-images td:nth-child(1) { width: 11%; }
-  #page-images th:nth-child(2), #page-images td:nth-child(2) { width: 13%; }
-  #page-images th:nth-child(3), #page-images td:nth-child(3) { width: 26%; }
-  #page-images th:nth-child(4), #page-images td:nth-child(4) { width: 50%; }
-  #page-images img.thumb { width: 52px; height: 52px; }
-  #page-images .img-cell { display: flex; gap: 10px; align-items: center; min-width: 0; }
-  #page-images .img-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
-  #page-images .img-btns { display: flex; flex-wrap: nowrap; gap: 6px; }
-  #page-images .img-btns button { flex: 0 0 auto; }
-  #page-images .img-info { font-size: 11px; white-space: nowrap; }
+  #page-images .table-wrap { 
+    max-height: none; 
+    overflow-x: auto; 
+  }
+  #page-images table { 
+    table-layout: fixed !important; 
+    min-width: 0 !important; 
+    width: 100% !important; 
+  }
+  /* 重新分配列宽，确保访问链接列有足够空间 */
+  #page-images th:nth-child(1), #page-images td:nth-child(1) { width: 12% !important; }
+  #page-images th:nth-child(2), #page-images td:nth-child(2) { width: 13% !important; }
+  #page-images th:nth-child(3), #page-images td:nth-child(3) { width: 30% !important; }
+  #page-images th:nth-child(4), #page-images td:nth-child(4) { width: 45% !important; }
+  
+  /* 图片单元格移除 min-width，防止撑破表格 */
+  #page-images .img-cell { 
+    display: flex; 
+    gap: 10px; 
+    align-items: center; 
+    min-width: 0 !important; 
+  }
+  #page-images img.thumb { 
+    width: 52px !important; 
+    height: 52px !important; 
+  }
+  #page-images .img-meta { 
+    display: flex; 
+    flex-direction: column; 
+    gap: 6px; 
+    min-width: 0 !important; 
+    flex: 1 1 auto !important; 
+  }
+  #page-images .img-btns { 
+    display: flex; 
+    flex-wrap: wrap !important; 
+    gap: 6px !important; 
+  }
+  #page-images .img-btns button { 
+    flex: 0 0 auto !important; 
+    padding: 5px 10px !important;
+    font-size: 11px !important;
+  }
+  #page-images .img-info { 
+    font-size: 11px !important; 
+    white-space: nowrap !important; 
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+  
+  /* 访问链接列：内部使用 Flex 并排，链接自动截断 */
   #page-images td[data-label="访问链接"] {
-    position: relative !important; vertical-align: middle !important;
-    padding: 10px 96px 10px 12px !important; white-space: nowrap;
+    display: table-cell !important;
+    vertical-align: middle !important;
+    padding: 10px 12px !important;
+    white-space: normal !important;
   }
-  #page-images td[data-label="访问链接"] .url-txt {
-    display: block !important; width: 100% !important; margin: 0 !important;
-    padding: 8px 10px !important; white-space: nowrap !important;
-    overflow: hidden !important; text-overflow: ellipsis !important;
-    font-size: 11.5px !important; box-sizing: border-box !important;
+  #page-images .url-cell-inner {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    width: 100% !important;
+    min-width: 0 !important;
   }
-  #page-images td[data-label="访问链接"] .copy-btn {
-    position: absolute !important; right: 12px !important;
-    top: 50% !important; transform: translateY(-50%) !important; margin: 0 !important;
+  #page-images .url-txt {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    font-size: 11.5px !important;
+    padding: 6px 10px !important;
+    box-sizing: border-box !important;
+  }
+  #page-images .copy-btn {
+    flex: 0 0 auto !important;
+    padding: 6px 12px !important;
+    font-size: 12px !important;
   }
 }
 
+/* ============ 移动端卡片布局 ============ */
 @media (max-width: 768px) {
   #page-images .card { padding: 14px 12px; }
   #page-images .table-wrap { overflow: visible; border: 0; background: transparent; max-height: none; width: 100%; }
@@ -257,17 +312,47 @@ img.thumb::after{content:none}
   #page-images td[data-label="图片"]     { grid-column: 1 / -1; }
   #page-images td[data-label="访问链接"] { grid-column: 1 / -1; }
   #page-images input[type=text] { padding: 11px 13px; font-size: 14px; border-radius: 10px; min-height: 42px; }
-  #page-images td[data-label="访问链接"] { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 !important; position: static !important; }
-  #page-images td[data-label="访问链接"]::before { flex: 0 0 100%; width: 100%; margin-bottom: 0; }
+  #page-images td[data-label="访问链接"] {
+    display: block !important;
+    padding: 0 !important;
+    position: static !important;
+  }
+  #page-images td[data-label="访问链接"]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: 6px;
+    font-weight: 700;
+  }
+  #page-images td[data-label="访问链接"] .url-cell-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
   #page-images td[data-label="访问链接"] .url-txt {
-    flex: 1 1 0; min-width: 0; margin: 0; white-space: nowrap; overflow: hidden;
-    text-overflow: ellipsis; padding: 11px 13px; font-size: 11.5px; line-height: 1.4;
-    min-height: 42px; display: flex; align-items: center;
-    position: static !important; width: auto !important;
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 11px 13px;
+    font-size: 11.5px;
+    line-height: 1.4;
+    min-height: 42px;
+    display: flex;
+    align-items: center;
   }
   #page-images td[data-label="访问链接"] .copy-btn {
-    flex: 0 0 auto; min-height: 42px; padding: 10px 16px; font-size: 13px;
-    position: static !important; transform: none !important;
+    flex: 0 0 auto;
+    min-height: 42px;
+    padding: 10px 16px;
+    font-size: 13px;
   }
   #page-images td[data-label="图片"] .img-cell {
     display: flex; flex-direction: row; align-items: flex-start; gap: 12px;
@@ -1356,11 +1441,15 @@ function renderImages() {
         '<input type="hidden" class="b64-input" value="">' +
         '<input type="hidden" class="original-name" value="' + esc(item.identifier) + '">' +
       '</div></td>' +
-      '<td data-label="访问链接"><div class="url-txt">' + esc(url) + '</div>' +
-        '<button type="button" class="btn-primary btn-xs copy-btn">' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
-          '<span>复制</span>' +
-        '</button></td>';
+      '<td data-label="访问链接">' +
+        '<div class="url-cell-inner">' +
+          '<div class="url-txt">' + esc(url) + '</div>' +
+          '<button type="button" class="btn-primary btn-xs copy-btn">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+            '<span>复制</span>' +
+          '</button>' +
+        '</div>' +
+      '</td>';
     tr.querySelector('.copy-btn').addEventListener('click', e => copyUrl(e.currentTarget, url));
     tr.querySelector('.del-btn').addEventListener('click', e => delRow(e.currentTarget));
     bindImgCell(tr);
@@ -1477,7 +1566,7 @@ $('addRowBtn').addEventListener('click', () => {
       '<input type="hidden" class="b64-input" value="">' +
       '<input type="hidden" class="original-name" value="">' +
     '</div></td>' +
-    '<td data-label="访问链接"><div class="url-txt">保存后显示</div></td>';
+    '<td data-label="访问链接"><div class="url-cell-inner"><div class="url-txt">保存后显示</div></div></td>';
   tr.querySelector('.del-btn').addEventListener('click', e => delRow(e.currentTarget));
   bindImgCell(tr);
   tbody.insertBefore(tr, tbody.firstChild);
