@@ -2,6 +2,7 @@
 const PUSH_COOLDOWN_SEC = 60;
 const STATS_DAYS        = 365;
 const GIT_DIR           = 'public/pic';
+const JWT_EXPIRES_SEC   = 8 * 3600;   // token 有效期 8 小时
 
 const PANEL_ID = '_panel';
 const PANEL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#14b8a6"/><stop offset="100%" stop-color="#0891b2"/></linearGradient></defs><rect width="32" height="32" rx="8" ry="8" fill="url(#g)"/><g transform="translate(4 4)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></g></svg>';
@@ -11,8 +12,10 @@ const PIC_RE = /^\/([^/.]+)\.(png|svg|jpg|jpeg|gif|webp)$/i;
 
 // 已知 bot / 测速工具 UA 关键字
 const BOT_RE = /bot|spider|crawl|slurp|wget|curl|python-requests|postman|headless|phantom|puppeteer|playwright|itdog|boce|17ce|ping\.pe|ce8\.com|monitor|probe|uptime|checker/i;
+
 // 测速网站 Referer 黑名单
 const REFERER_BLOCK_RE = /itdog\.cn|boce\.com|17ce\.com|ping\.pe|ce8\.com|chinaz\.com|webkaka/i;
+
 // 老版 Chrome（2022 年前）几乎只出现在爬虫/测速工具
 const OLD_CHROME_THRESHOLD = 100;
 
@@ -44,8 +47,8 @@ function ipSegment(ip) {
 
 // 爬虫 / 测速工具识别
 function isBotRequest(request) {
-  const ua       = request.headers.get('User-Agent') || '';
-  const referer  = request.headers.get('Referer') || request.headers.get('Origin') || '';
+  const ua      = request.headers.get('User-Agent') || '';
+  const referer = request.headers.get('Referer') || request.headers.get('Origin') || '';
   const pathname = new URL(request.url).pathname;
 
   // UA 关键字命中
@@ -66,6 +69,70 @@ function isBotRequest(request) {
   }
 
   return { bot: false };
+}
+
+//JWT（HS256，纯 Web Crypto）
+
+function b64urlEncode(buf) {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecode(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function jwtSign(payload, secret) {
+  const enc  = new TextEncoder();
+  const key  = await crypto.subtle.importKey(
+    'raw', enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false, ['sign']
+  );
+  const header  = b64urlEncode(enc.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
+  const body    = b64urlEncode(enc.encode(JSON.stringify(payload)));
+  const sigBuf  = await crypto.subtle.sign('HMAC', key, enc.encode(`${header}.${body}`));
+  const sig     = b64urlEncode(sigBuf);
+  return `${header}.${body}.${sig}`;
+}
+
+async function jwtVerify(token, secret) {
+  if (typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [header, body, sig] = parts;
+
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false, ['verify']
+  );
+  const valid = await crypto.subtle.verify(
+    'HMAC', key,
+    b64urlDecode(sig),
+    enc.encode(`${header}.${body}`)
+  );
+  if (!valid) return null;
+
+  let payload;
+  try { payload = JSON.parse(new TextDecoder().decode(b64urlDecode(body))); }
+  catch { return null; }
+
+  if (payload.exp && Math.floor(Date.now() / 1000) > payload.exp) return null;
+  return payload;
+}
+
+// JWT 签名密钥 = PASSWORD + 固定盐（与密码解耦，换密码自动使旧 token 失效）
+function jwtSecret(env) {
+  return (env.PASSWORD || '') + ':cf-visitor-stat-jwt-v1';
 }
 
 // 入口
@@ -114,8 +181,11 @@ export default {
 async function handleApi(request, env, ctx, sub) {
   const method = request.method;
 
-  if (sub === 'login'  && method === 'POST') return handleLogin(request, env);
-  if (!checkAuth(request, env)) return unauthorized();
+  if (sub === 'login' && method === 'POST') return handleLogin(request, env);
+
+  // 其余接口验 JWT
+  const payload = await checkAuth(request, env);
+  if (!payload) return unauthorized();
 
   if (sub === 'init'   && method === 'GET')  return handleInitCheck(env);
   if (sub === 'init'   && method === 'POST') return handleInitRun(env);
@@ -126,6 +196,51 @@ async function handleApi(request, env, ctx, sub) {
   if (sub === 'deploy' && method === 'POST') return handleDeploy(env);
 
   return notFound();
+}
+
+// 鉴权（验 JWT）
+// 返回 payload 对象（通过）或 null（拒绝）
+async function checkAuth(request, env) {
+  const token = request.headers.get('X-Auth-Token') || '';
+  if (!token) return null;
+  return await jwtVerify(token, jwtSecret(env));
+}
+
+// 登录（验密码 → 签发 JWT）
+async function handleLogin(request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResponse({ ok: false, error: '格式错误' }, 400); }
+
+  if (!env.PASSWORD) {
+    // 未设密码：直接签发
+    const token = await jwtSign(
+      { sub: 'admin', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + JWT_EXPIRES_SEC },
+      jwtSecret(env)
+    );
+    return jsonResponse({ ok: true, token });
+  }
+
+  if (typeof body.password !== 'string' || !constantTimeEqual(body.password, env.PASSWORD)) {
+    return jsonResponse({ ok: false, error: '密码错误' }, 401);
+  }
+
+  const now   = Math.floor(Date.now() / 1000);
+  const token = await jwtSign(
+    { sub: 'admin', iat: now, exp: now + JWT_EXPIRES_SEC },
+    jwtSecret(env)
+  );
+  return jsonResponse({ ok: true, token });
+}
+
+// 恒定时间比较（防时序攻击）
+function constantTimeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ab = new TextEncoder().encode(a), bb = new TextEncoder().encode(b);
+  if (ab.length !== bb.length) return false;
+  let r = 0;
+  for (let i = 0; i < ab.length; i++) r |= ab[i] ^ bb[i];
+  return r === 0;
 }
 
 // 初始化检查
@@ -210,34 +325,6 @@ async function handleInitRun(env) {
   }
 }
 
-// 鉴权
-function checkAuth(request, env) {
-  const auth = request.headers.get('X-Auth-Token') || '';
-  return !!auth && !!env.PASSWORD && constantTimeEqual(auth, env.PASSWORD);
-}
-
-// 恒定时间比较
-function constantTimeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const ab = new TextEncoder().encode(a), bb = new TextEncoder().encode(b);
-  if (ab.length !== bb.length) return false;
-  let r = 0;
-  for (let i = 0; i < ab.length; i++) r |= ab[i] ^ bb[i];
-  return r === 0;
-}
-
-// 登录
-async function handleLogin(request, env) {
-  let body;
-  try { body = await request.json(); }
-  catch { return jsonResponse({ ok: false, error: '格式错误' }, 400); }
-  if (!env.PASSWORD) return jsonResponse({ ok: true });
-  if (typeof body.password !== 'string' || !constantTimeEqual(body.password, env.PASSWORD)) {
-    return jsonResponse({ ok: false, error: '密码错误' }, 401);
-  }
-  return jsonResponse({ ok: true });
-}
-
 // 数据接口
 async function handleData(env) {
   const [index, stats] = await Promise.all([readIndex(env), getStats(env)]);
@@ -309,11 +396,10 @@ async function getStats(env) {
 async function handleHourly(request, env) {
   const url        = new URL(request.url);
   const identifier = url.searchParams.get('identifier') || '';
-  const tzOffset   = 8;   // 上海时区 UTC+8
+  const tzOffset   = 8;
 
-  const now      = Date.now();
-  // 上海今天 0 点对应的 UTC 毫秒
-  const localNow = new Date(now + tzOffset * 3600 * 1000);
+  const now       = Date.now();
+  const localNow  = new Date(now + tzOffset * 3600 * 1000);
   const localMidnight = new Date(Date.UTC(
     localNow.getUTCFullYear(),
     localNow.getUTCMonth(),
@@ -327,10 +413,7 @@ async function handleHourly(request, env) {
   // 今天非 bot 记录按小时分组
   const conds  = ['ts >= ?', 'ts < ?', 'is_bot = 0'];
   const params = [todayStart, todayEnd];
-  if (identifier) {
-    conds.push('identifier = ?');
-    params.push(identifier);
-  }
+  if (identifier) { conds.push('identifier = ?'); params.push(identifier); }
   const where = 'WHERE ' + conds.join(' AND ');
 
   try {
@@ -365,10 +448,10 @@ async function handleLogs(request, env) {
   const pageSize   = Math.min(100, Math.max(10, parseInt(url.searchParams.get('pageSize') || '50', 10)));
 
   const conds = [], params = [];
-  if (date)        { conds.push('visit_date = ?'); params.push(date); }
-  if (identifier)  { conds.push('identifier = ?'); params.push(identifier); }
-  if (ip)          { conds.push('ip LIKE ?');       params.push('%' + ip + '%'); }
-  if (!includeBot)   conds.push('is_bot = 0');
+  if (date)       { conds.push('visit_date = ?'); params.push(date); }
+  if (identifier) { conds.push('identifier = ?'); params.push(identifier); }
+  if (ip)         { conds.push('ip LIKE ?');       params.push('%' + ip + '%'); }
+  if (!includeBot)  conds.push('is_bot = 0');
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
 
   const { results: cnt } = await env.DB.prepare(
@@ -402,49 +485,36 @@ async function handleSaveImages(request, env) {
 
   const seen = new Set();
   for (const item of uploads) {
-    if (typeof item.identifier !== 'string' || !ID_RE.test(item.identifier)) {
+    if (typeof item.identifier !== 'string' || !ID_RE.test(item.identifier))
       return jsonResponse({ ok: false, error: `非法标识符：${item.identifier || '(空)'}` }, 400);
-    }
-    if (item.identifier === PANEL_ID) {
+    if (item.identifier === PANEL_ID)
       return jsonResponse({ ok: false, error: `"${PANEL_ID}" 是系统保留标识符，请换一个` }, 400);
-    }
-    if (seen.has(item.identifier)) {
+    if (seen.has(item.identifier))
       return jsonResponse({ ok: false, error: `标识符重复：${item.identifier}` }, 400);
-    }
     seen.add(item.identifier);
-    if (typeof item.base64 !== 'string' || !item.base64) {
+    if (typeof item.base64 !== 'string' || !item.base64)
       return jsonResponse({ ok: false, error: `${item.identifier} 缺少图片` }, 400);
-    }
   }
   for (const item of keeps) {
-    if (typeof item.identifier !== 'string' || !ID_RE.test(item.identifier)) {
+    if (typeof item.identifier !== 'string' || !ID_RE.test(item.identifier))
       return jsonResponse({ ok: false, error: `非法标识符：${item.identifier || '(空)'}` }, 400);
-    }
-    if (item.identifier === PANEL_ID) {
+    if (item.identifier === PANEL_ID)
       return jsonResponse({ ok: false, error: `"${PANEL_ID}" 是系统保留标识符，请换一个` }, 400);
-    }
-    if (seen.has(item.identifier)) {
+    if (seen.has(item.identifier))
       return jsonResponse({ ok: false, error: `标识符重复：${item.identifier}` }, 400);
-    }
     seen.add(item.identifier);
   }
 
   const oldIndex = await readIndex(env);
   const oldMap   = new Map(oldIndex.map(x => [x.identifier, x]));
 
-  const newIndex = [];
-  const toDelete = [];
-  const toUpload = [];
+  const newIndex = [], toDelete = [], toUpload = [];
 
   // 保留项
   for (const k of keeps) {
     const old = oldMap.get(k.identifier);
-    if (!old || !old.file) {
-      return jsonResponse({
-        ok: false,
-        error: `${k.identifier} 在服务器上没有图片，请重新上传`,
-      }, 400);
-    }
+    if (!old || !old.file)
+      return jsonResponse({ ok: false, error: `${k.identifier} 在服务器上没有图片，请重新上传` }, 400);
     newIndex.push({
       identifier: k.identifier,
       name: String(k.name || old.name || '').slice(0, 100),
@@ -459,12 +529,10 @@ async function handleSaveImages(request, env) {
     try { bytes = base64ToBytes(base64Data); }
     catch { return jsonResponse({ ok: false, error: `${item.identifier} base64 损坏` }, 400); }
 
-    if (bytes.length === 0) {
+    if (bytes.length === 0)
       return jsonResponse({ ok: false, error: `${item.identifier} 图片为空` }, 400);
-    }
-    if (bytes.length > 8 * 1024 * 1024) {
+    if (bytes.length > 8 * 1024 * 1024)
       return jsonResponse({ ok: false, error: `${item.identifier} 图片过大（>8MB）` }, 400);
-    }
 
     const ext      = mimeToExt(mime);
     const fileName = `${item.identifier}.${ext}`;
@@ -472,9 +540,7 @@ async function handleSaveImages(request, env) {
     const hash     = await sha256Short(bytes, 8);
 
     const old = oldMap.get(item.identifier);
-    if (old && old.file && old.file !== fileName) {
-      toDelete.push(`${GIT_DIR}/${old.file}`);
-    }
+    if (old && old.file && old.file !== fileName) toDelete.push(`${GIT_DIR}/${old.file}`);
 
     toUpload.push({ path: filePath, bytes, message: `update: ${item.identifier}.${ext}` });
     newIndex.push({
@@ -487,15 +553,11 @@ async function handleSaveImages(request, env) {
   // 删除不再使用的旧图
   const newIds = new Set(newIndex.map(x => x.identifier));
   for (const old of oldIndex) {
-    if (!newIds.has(old.identifier) && old.file) {
-      toDelete.push(`${GIT_DIR}/${old.file}`);
-    }
+    if (!newIds.has(old.identifier) && old.file) toDelete.push(`${GIT_DIR}/${old.file}`);
   }
 
   // 上传新图到 Git
-  for (const u of toUpload) {
-    await gitPutBinary(env, u.path, u.bytes, u.message);
-  }
+  for (const u of toUpload) await gitPutBinary(env, u.path, u.bytes, u.message);
 
   // 写入 D1 索引
   try {
@@ -519,19 +581,14 @@ async function handleSaveImages(request, env) {
   }
 
   return jsonResponse({
-    ok: true,
-    count: newIndex.length,
-    uploaded: toUpload.length,
-    deleted,
-    deleteErrors: deleteErrors.length ? deleteErrors : undefined,
-    index: newIndex,
+    ok: true, count: newIndex.length, uploaded: toUpload.length,
+    deleted, deleteErrors: deleteErrors.length ? deleteErrors : undefined, index: newIndex,
   });
 }
 
 // 写入 D1 索引
 async function writeIndexToD1(env, newIndex) {
   const stmts = [];
-
   if (newIndex.length === 0) {
     stmts.push(env.DB.prepare('DELETE FROM img_index'));
   } else {
@@ -541,7 +598,6 @@ async function writeIndexToD1(env, newIndex) {
         .bind(...newIndex.map(x => x.identifier))
     );
   }
-
   const now = Date.now();
   newIndex.forEach((item, i) => {
     stmts.push(
@@ -549,26 +605,19 @@ async function writeIndexToD1(env, newIndex) {
         `INSERT INTO img_index (identifier, name, file, ext, mime, size, hash, sort_order, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(identifier) DO UPDATE SET
-           name       = excluded.name,
-           file       = excluded.file,
-           ext        = excluded.ext,
-           mime       = excluded.mime,
-           size       = excluded.size,
-           hash       = excluded.hash,
-           sort_order = excluded.sort_order,
-           updated_at = excluded.updated_at`
-      ).bind(
-        item.identifier, item.name || '', item.file,
-        item.ext || '', item.mime || '', item.size || 0,
-        item.hash || '', i, now
-      )
+           name=excluded.name, file=excluded.file, ext=excluded.ext,
+           mime=excluded.mime, size=excluded.size, hash=excluded.hash,
+           sort_order=excluded.sort_order, updated_at=excluded.updated_at`
+      ).bind(item.identifier, item.name || '', item.file,
+             item.ext || '', item.mime || '', item.size || 0,
+             item.hash || '', i, now)
     );
   });
-
   await env.DB.batch(stmts);
 }
 
 // 触发部署
+
 async function handleDeploy(env) {
   const hookUrl = env.CF_DEPLOY_HOOK_URL;
   if (!hookUrl) return jsonResponse({ ok: false, error: '未配置 CF_DEPLOY_HOOK_URL' }, 500);
@@ -584,32 +633,27 @@ async function handleDeploy(env) {
   }
 }
 
-// 面板地址：用请求域名
+// 图片访问
+
 function getPanelUrl(request) {
-  try {
-    return new URL(request.url).origin;
-  } catch {
-    return '';
-  }
+  try { return new URL(request.url).origin; } catch { return ''; }
 }
 
 // 图片访问（核心）
 async function handleVisit(request, env, ctx, identifier) {
   if (!ID_RE.test(identifier)) return notFound();
 
-  const ua      = request.headers.get('User-Agent') || '';
-  const referer = request.headers.get('Referer') || request.headers.get('Origin') || '';
+  const ua       = request.headers.get('User-Agent') || '';
+  const referer  = request.headers.get('Referer') || request.headers.get('Origin') || '';
   const botCheck = isBotRequest(request);
 
   // 内置追踪点 _panel.svg
   if (identifier === PANEL_ID) {
     if (!botCheck.bot) {
-      ctx.waitUntil(
-        (async () => {
-          try { await trackVisit(request, env, identifier); }
-          catch (e) { console.error('[panel track failed]', (e && e.stack) || e); }
-        })()
-      );
+      ctx.waitUntil((async () => {
+        try { await trackVisit(request, env, identifier); }
+        catch (e) { console.error('[panel track failed]', (e && e.stack) || e); }
+      })());
     } else {
       console.log('[panel visit] skipped bot:', botCheck.reason);
     }
@@ -631,12 +675,10 @@ async function handleVisit(request, env, ctx, identifier) {
   if (!item || !item.file) return notFound();
 
   if (!botCheck.bot) {
-    ctx.waitUntil(
-      (async () => {
-        try { await trackVisit(request, env, identifier); }
-        catch (e) { console.error('[track failed]', (e && e.stack) || e); }
-      })()
-    );
+    ctx.waitUntil((async () => {
+      try { await trackVisit(request, env, identifier); }
+      catch (e) { console.error('[track failed]', (e && e.stack) || e); }
+    })());
   } else {
     console.log('[visit] skipped bot:', botCheck.reason,
       '| ua:', ua.slice(0, 80), '| ref:', referer.slice(0, 80));
@@ -647,31 +689,20 @@ async function handleVisit(request, env, ctx, identifier) {
 
 // 返回图片资源
 async function serveImage(request, env, item) {
-  if (!env.ASSETS) {
-    console.error('[serveImage] env.ASSETS undefined');
-    return notFound();
-  }
+  if (!env.ASSETS) { console.error('[serveImage] env.ASSETS undefined'); return notFound(); }
 
-  const candidates = [
-    `/pic/${item.file}`,
-    `/public/pic/${item.file}`,
-  ];
+  const candidates = [`/pic/${item.file}`, `/public/pic/${item.file}`];
 
   for (const assetPath of candidates) {
     const assetUrl = new URL(assetPath, request.url);
     let assetResp;
     try {
       assetResp = await env.ASSETS.fetch(new Request(assetUrl.toString(), {
-        method: 'GET',
-        headers: request.headers,
+        method: 'GET', headers: request.headers,
       }));
-    } catch (e) {
-      console.error('[serveImage] ASSETS.fetch:', assetPath, e);
-      continue;
-    }
+    } catch (e) { console.error('[serveImage] ASSETS.fetch:', assetPath, e); continue; }
 
     if (!assetResp.ok) continue;
-
     const ct = assetResp.headers.get('Content-Type') || '';
     if (ct.includes('text/html')) continue;
 
@@ -686,11 +717,10 @@ async function serveImage(request, env, item) {
 
     return new Response(assetResp.body, { status: 200, headers });
   }
-
   return notFound();
 }
 
-// 写库追踪
+// 记录访问
 async function trackVisit(request, env, identifier) {
   const ip      = request.headers.get('CF-Connecting-IP') || 'Unknown';
   const ua      = request.headers.get('User-Agent') || '';
@@ -712,14 +742,10 @@ async function trackVisit(request, env, identifier) {
       ).bind(
         identifier, now, date, ip,
         cf.country || '', cf.region || '', cf.city || '', cf.asOrganization || '',
-        ua.slice(0, 500),
-        device, os, browser, engine,
-        referer.slice(0, 500),
-        0
+        ua.slice(0, 500), device, os, browser, engine, referer.slice(0, 500), 0
       ),
       env.DB.prepare(
-        `INSERT INTO daily_summary (date, identifier, count)
-         VALUES (?, ?, 1)
+        `INSERT INTO daily_summary (date, identifier, count) VALUES (?, ?, 1)
          ON CONFLICT(date, identifier) DO UPDATE SET count = count + 1`
       ).bind(date, identifier),
     ]);
@@ -728,9 +754,7 @@ async function trackVisit(request, env, identifier) {
   }
 
   try {
-    await maybeNotify(request, env, identifier, {
-      ip, ua, cf, referer, os, browser, engine, device,
-    });
+    await maybeNotify(request, env, identifier, { ip, ua, cf, referer, os, browser, engine, device });
   } catch (e) {
     console.error('[notify failed]', (e && e.stack) || e);
   }
@@ -744,7 +768,6 @@ async function maybeNotify(request, env, identifier, info) {
 
   if (!memoryPeek(ipKey,  ttlMs)) return;
   if (!memoryPeek(segKey, ttlMs)) return;
-
   memorySet(ipKey);
   memorySet(segKey);
 
@@ -768,9 +791,7 @@ async function maybeNotify(request, env, identifier, info) {
       const index = await readIndex(env);
       const item  = index.find(x => x && x.identifier === identifier);
       if (item?.name) name = item.name;
-    } catch (e) {
-      // 忽略
-    }
+    } catch (e) { /* 忽略 */ }
   }
 
   const flag     = countryCodeToEmoji(info.cf.country || '');
@@ -784,88 +805,48 @@ async function maybeNotify(request, env, identifier, info) {
   };
 
   const L = {
-    id:   '标    识',
-    ip:   'IP地址',
-    geo:  '归属地',
-    isp:  '运营商',
-    ref:  '来    源',
-    dev:  '设    备',
-    brw:  '浏览器',
-    day:  '今    日',
-    time: '时    间',
+    id: '标    识', ip: 'IP地址', geo: '归属地', isp: '运营商',
+    ref: '来    源', dev: '设    备', brw: '浏览器', day: '今    日', time: '时    间',
   };
 
   const message =
     '🔰 *访客累计：' + totalToday + '*\n\n' +
     '*来源信息*\n' +
-    '· ' + L.id  + '：' + mEsc(name, 40)                    + '\n' +
-    '· ' + L.ip  + '：`' + mEsc(info.ip, 50)                + '`\n' +
-    '· ' + L.geo + '：' + flag + ' ' + mEsc(location, 50)   + '\n' +
+    '· ' + L.id  + '：' + mEsc(name, 40)                              + '\n' +
+    '· ' + L.ip  + '：`' + mEsc(info.ip, 50)                         + '`\n' +
+    '· ' + L.geo + '：' + flag + ' ' + mEsc(location, 50)            + '\n' +
     '· ' + L.isp + '：' + mEsc(info.cf.asOrganization || '未知', 40) + '\n' +
-    '· ' + L.ref + '：`' + mEsc(info.referer || '—', 60)    + '`\n\n' +
+    '· ' + L.ref + '：`' + mEsc(info.referer || '—', 60)             + '`\n\n' +
     '*设备指纹*\n' +
     '· ' + L.dev + '：' + mEsc(info.device, 20) + ' · ' + mEsc(info.os, 40)      + '\n' +
     '· ' + L.brw + '：' + mEsc(info.browser, 40) + ' · ' + mEsc(info.engine, 40) + '\n\n' +
     '· ' + L.day  + '：' + idToday + ' 次\n' +
     '· ' + L.time + '：' + nowStr;
 
-  const panelUrl = getPanelUrl(request);
-
   const payload = {
     chat_id: env.TG_ID,
     text: message,
     parse_mode: 'Markdown',
     disable_web_page_preview: true,
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '👤 管理仪表盘', url: panelUrl }],
-      ],
-    },
+    reply_markup: { inline_keyboard: [[{ text: '👤 管理仪表盘', url: getPanelUrl(request) }]] },
   };
 
   await sendTelegram(payload, env.TG_TOKEN);
 }
 
-// 发送 TG 消息
-async function sendTelegram(payload, token) {
-  if (!token)                        return;
-  if (!payload || !payload.chat_id)  return;
-
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 5000);
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
-      signal:  ctrl.signal,
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      console.error('TG failed:', res.status, t.slice(0, 200));
-    }
-  } catch (e) {
-    if (e.name === 'AbortError') console.warn('TG timeout');
-    else console.error('TG error:', e);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// 清理环境变量
+// GitHub 操作
 function sanitizeEnv(s) {
   return String(s ?? '').trim().replace(/[\r\n\t]+/g, '');
 }
 
-// GitHub 配置
 function gitConfig(env) {
   const token  = sanitizeEnv(env.GITHUB_TOKEN);
   const repo   = sanitizeEnv(env.REPO_NAME);
   const branch = sanitizeEnv(env.BRANCH) || 'main';
   if (!token) throw new Error('缺少 GITHUB_TOKEN');
   if (!repo)  throw new Error('缺少 REPO_NAME');
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo))   throw new Error('REPO_NAME 格式错误');
-  if (/[^\x20-\x7E]/.test(token))         throw new Error('GITHUB_TOKEN 含非法字符');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error('REPO_NAME 格式错误');
+  if (/[^\x20-\x7E]/.test(token))       throw new Error('GITHUB_TOKEN 含非法字符');
   return { token, repo, branch };
 }
 
@@ -937,8 +918,7 @@ async function gitDelete(env, path, message) {
 // 日期（上海时区）YYYY-MM-DD
 function formatDate(date) {
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(date);
 }
 
@@ -961,9 +941,8 @@ function base64ToBytes(b64) {
 function bytesToBase64(bytes) {
   let binary = '';
   const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
+  for (let i = 0; i < bytes.length; i += chunk)
     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
   return btoa(binary);
 }
 
@@ -997,13 +976,13 @@ function parseUA(ua) {
   if (/Mobile|Android|iPhone|BlackBerry|IEMobile|Silk/.test(ua)) device = '手机';
   else if (/iPad|Tablet/.test(ua)) device = '平板';
 
-  if (/Windows NT 10/.test(ua))      os = 'Windows 10';
+  if (/Windows NT 10/.test(ua))        os = 'Windows 10';
   else if (/Windows NT 6\.3/.test(ua)) os = 'Windows 8.1';
   else if (/Windows NT 6\.1/.test(ua)) os = 'Windows 7';
-  else if (/Mac OS X/.test(ua))      os = 'macOS';
-  else if (/Android/.test(ua))       os = 'Android';
-  else if (/iPhone|iPad/.test(ua))   os = 'iOS';
-  else if (/Linux/.test(ua))         os = 'Linux';
+  else if (/Mac OS X/.test(ua))        os = 'macOS';
+  else if (/Android/.test(ua))         os = 'Android';
+  else if (/iPhone|iPad/.test(ua))     os = 'iOS';
+  else if (/Linux/.test(ua))           os = 'Linux';
 
   const m = (re) => { const r = ua.match(re); return r ? r[1] : null; };
   const qq = m(/QQBrowser\/([\d.]+)/);   if (qq) browser = `QQ浏览器 ${qq}`;
@@ -1026,12 +1005,9 @@ function parseUA(ua) {
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: {
-      'Content-Type': 'application/json;charset=utf-8',
-      'Cache-Control': 'no-store',
-    },
+    headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
-function notFound()    { return new Response('Not Found',  { status: 404 }); }
-function unauthorized(){ return jsonResponse({ ok: false, error: '未授权' }, 401); }
+function notFound()     { return new Response('Not Found', { status: 404 }); }
+function unauthorized() { return jsonResponse({ ok: false, error: '未授权' }, 401); }
