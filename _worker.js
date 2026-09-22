@@ -298,7 +298,7 @@ async function getStats(env) {
   }
 
   return {
-    dates: dates.slice().reverse(),   // 升序（最旧 → 最新）
+    dates: dates.slice().reverse(),   // 升序
     totalByDate,
     byIdentifier,
     identifiers: [...idSet].sort(),
@@ -771,6 +771,7 @@ async function maybeNotify(request, env, identifier, info) {
     } catch (e) {
       // 忽略
     }
+  }
 
   const flag     = countryCodeToEmoji(info.cf.country || '');
   const location = [info.cf.country, info.cf.region, info.cf.city].filter(Boolean).join(' ') || '未知';
