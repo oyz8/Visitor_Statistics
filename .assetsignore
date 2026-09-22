@@ -1,0 +1,15 @@
+# 文档
+README.md
+*.md
+
+# git / 编辑器
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# 环境变量
+.env
+.env.*
+.dev.vars
