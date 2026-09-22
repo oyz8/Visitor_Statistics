@@ -56,16 +56,6 @@ button:disabled{cursor:not-allowed;transform:none!important;opacity:.55}
 .btn-danger{color:#fff;background:linear-gradient(135deg,var(--danger),#dc2626)}
 .btn-xs{padding:6px 12px;font-size:12px;border-radius:8px;gap:4px}
 .btn-xs svg{width:12px;height:12px}
-
-/* GitHub 三角标 */
-.github-corner{position:fixed;top:0;right:0;z-index:2000;line-height:0;display:block;border:0;overflow:hidden}
-.github-corner svg{width:88px;height:88px;border:0;display:block;color:#fff}
-.github-corner .gh-bg{fill:var(--primary);transition:fill .3s}
-.github-corner .gh-arm,.github-corner .gh-body{fill:currentColor}
-.github-corner:hover .gh-bg{fill:var(--primary-hover)}
-.github-corner:hover .gh-arm{animation:octocat-wave 560ms ease-in-out}
-@keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}
-
 .login-overlay{position:fixed;inset:0;z-index:1500;display:flex;align-items:center;justify-content:center;background:var(--bg-gradient);padding:24px}
 .login-overlay.hidden{display:none}
 .login-box{width:100%;max-width:380px;padding:32px 28px;background:var(--panel);border:1px solid var(--panel-border);border-radius:22px;box-shadow:var(--shadow);backdrop-filter:blur(16px)}
@@ -200,6 +190,15 @@ img.thumb::after{content:none}
 .toast.success{border-color:rgba(16,185,129,.4)}
 .toast.error{border-color:rgba(239,68,68,.4);color:var(--danger)}
 
+.github-corner{position:fixed;top:0;right:0;z-index:2000;line-height:0;display:block;border:0;overflow:hidden}
+.github-corner svg{width:88px;height:88px;border:0;display:block;color:#fff}
+.github-corner .gh-bg{fill:var(--primary);transition:fill .3s}
+.github-corner .gh-arm,.github-corner .gh-body{fill:currentColor}
+.github-corner:hover .gh-bg{fill:var(--primary-hover)}
+.github-corner:hover .gh-arm{animation:octocat-wave 560ms ease-in-out}
+@keyframes octocat-wave{0%,100%{transform:rotate(0)}20%,60%{transform:rotate(-25deg)}40%,80%{transform:rotate(10deg)}}
+.github-corner.hidden{display:none !important}
+
 @media (min-width: 769px) {
   #page-images .table-wrap { max-height: none; overflow-x: auto; }
   #page-images table { table-layout: fixed !important; min-width: 0 !important; width: 100% !important; }
@@ -299,17 +298,15 @@ img.thumb::after{content:none}
   .chart-empty{height:110px}
   .seg-btn{padding:6px 11px;font-size:12px}
   .range-btn{padding:6px 12px;font-size:12px}
-  .github-corner svg{width:56px;height:56px}
 }
 @media(max-width:380px){
   .nav-btn{font-size:13.5px;gap:4px;padding:11px 4px}
-  .github-corner svg{width:44px;height:44px}
 }
 </style>
 </head>
 <body>
 
-<a href="https://github.com/oyz8/Visitor_Statistics" target="_blank" rel="noopener" class="github-corner" aria-label="View source on GitHub">
+<a id="githubCorner" href="https://github.com/oyz8/Visitor_Statistics" target="_blank" rel="noopener" class="github-corner hidden" aria-label="View source on GitHub">
   <svg viewBox="0 0 250 250" aria-hidden="true">
     <path class="gh-bg" d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path>
     <path class="gh-arm" style="transform-origin:130px 106px"
@@ -640,7 +637,7 @@ const state = {
   logPage: 1, logPageSize: 50, logTotal: 0,
   lastChart: null,
   chartRange: 'today',
-  hourlyCache: null,   // { tab, hours, counts }
+  hourlyCache: null,
 };
 
 const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 };
@@ -844,18 +841,29 @@ $('themeToggle').addEventListener('click', () => {
   }
 });
 
+function showGithubCorner() {
+  const corner = $('githubCorner');
+  if (corner) corner.classList.remove('hidden');
+}
+function hideGithubCorner() {
+  const corner = $('githubCorner');
+  if (corner) corner.classList.add('hidden');
+}
+
 // 登录 / 初始化
 function showLogin() {
   const icon = $('panelIcon');
   if (icon && !icon.src.endsWith('/_panel.svg')) icon.src = '/_panel.svg';
   $('loginOverlay').classList.remove('hidden');
   $('app').style.display = 'none';
+  showGithubCorner();
   setTimeout(() => $('pwdInput').focus(), 100);
 }
 function hideLogin() {
   $('loginOverlay').classList.add('hidden');
   $('loginErr').classList.remove('show');
   $('pwdInput').value = '';
+  hideGithubCorner();
 }
 
 async function doLogin() {
@@ -970,7 +978,6 @@ function renderStats() {
   if (!state.stats) return;
   const { dates, totalByDate, byIdentifier, identifiers } = state.stats;
 
-  // 标识符 Seg
   const seg = $('statSeg');
   seg.innerHTML = '';
   const mkSeg = (id, label) => {
@@ -996,7 +1003,7 @@ function renderStats() {
     seg.appendChild(mkSeg(id, label));
   });
 
-  const sorted = [...dates].reverse();   // 最新 -> 最旧
+  const sorted = [...dates].reverse();
   const isTotal = state.currentTab === '__total__';
   let srcMap;
   if (isTotal) {
@@ -1008,17 +1015,14 @@ function renderStats() {
     $('idTableWrap').style.display = 'none';
   }
 
-  // 摘要行（始终基于 daily_summary，与图表范围无关）
   $('s-today').textContent     = srcMap[sorted[0]] || 0;
   $('s-yesterday').textContent = srcMap[sorted[1]] || 0;
   $('s-week').textContent      = sorted.slice(0, 7).reduce((s, d) => s + (srcMap[d] || 0), 0);
   $('s-month').textContent     = sorted.reduce((s, d) => s + (srcMap[d] || 0), 0);
 
   if (state.chartRange === 'today') {
-    // 今天：走 24 小时接口
     loadAndDrawHourly();
   } else {
-    // 其余范围：按天聚合
     const n = RANGE_DAYS[state.chartRange] || 7;
     const chartDates  = dates.slice(-n);
     const chartCounts = chartDates.map(d => srcMap[d] || 0);
@@ -1048,7 +1052,6 @@ function renderIdTable(sorted) {
 
 // 24 小时数据加载
 async function loadAndDrawHourly() {
-  // 命中缓存直接绘制
   if (state.hourlyCache && state.hourlyCache.tab === state.currentTab) {
     const { hours, counts } = state.hourlyCache;
     state.lastChart = { dates: hours, counts, mode: 'hourly' };
@@ -1056,7 +1059,6 @@ async function loadAndDrawHourly() {
     return;
   }
 
-  // 显示加载中
   $('chartWrap').innerHTML = '<div class="chart-empty">加载中…</div>';
   $('chartX').innerHTML = '';
 
@@ -1095,7 +1097,7 @@ function niceMax(v) {
   return nice * base;
 }
 
-// 绘制图表（mode: 'hourly' | 'daily'）
+// 绘制图表
 function drawChart(origDates, origCounts, mode) {
   const dates  = [...origDates];
   const counts = [...origCounts];
@@ -1174,7 +1176,6 @@ function drawChart(origDates, origCounts, mode) {
   `;
   wrap.innerHTML = svg;
 
-  // Tooltip
   const tip = document.createElement('div');
   tip.className = 'chart-tip';
   wrap.appendChild(tip);
@@ -1198,9 +1199,7 @@ function drawChart(origDates, origCounts, mode) {
     });
   });
 
-  // X 轴标签
   if (mode === 'hourly') {
-    // 固定显示 5 个时间点：00:00 / 06:00 / 12:00 / 18:00 / 23:00
     const labelIdx = [0, 6, 12, 18, 23];
     xEl.style.padding = '6px 0 0 0';
     xEl.innerHTML =
