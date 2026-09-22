@@ -425,17 +425,14 @@ img.thumb::after{content:none}
           <button class="seg-btn active" data-id="__total__">全部</button>
         </div>
       </div>
-
       <div class="summary-row">
         <div class="summary-item"><div class="num" id="s-today">-</div><div class="lbl">今日</div></div>
         <div class="summary-item"><div class="num" id="s-yesterday">-</div><div class="lbl">昨日</div></div>
         <div class="summary-item"><div class="num" id="s-week">-</div><div class="lbl">近 7 天</div></div>
         <div class="summary-item"><div class="num" id="s-month">-</div><div class="lbl">近 1 年</div></div>
       </div>
-
       <div class="chart-wrap" id="chartWrap"></div>
       <div class="chart-x" id="chartX"></div>
-
       <div class="chart-range" id="chartRange">
         <button class="range-btn active" data-range="today">今天</button>
         <button class="range-btn" data-range="7d">7 天</button>
@@ -443,7 +440,6 @@ img.thumb::after{content:none}
         <button class="range-btn" data-range="90d">3 个月</button>
         <button class="range-btn" data-range="1y">1 年</button>
       </div>
-
       <div id="idTableWrap" style="display:none;margin-top:16px">
         <table class="id-table">
           <thead><tr><th>标识符</th><th>名称</th><th>今日</th><th>近 7 天</th><th>近 1 年</th></tr></thead>
@@ -621,8 +617,8 @@ img.thumb::after{content:none}
 <div id="toast" class="toast"></div>
 
 <script>
-const KEY_PWD  = 'cf-visitor-stat-pwd';
-const KEY_PAGE = 'cf-visitor-stat-page';
+const KEY_TOKEN = 'cf-visitor-stat-token';
+const KEY_PAGE  = 'cf-visitor-stat-page';
 const MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
 const MAX_BASE64_BYTES = 8 * 1024 * 1024;
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -646,9 +642,10 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const formatBytes = (n) => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(2) + ' MB';
-const getPwd = () => localStorage.getItem(KEY_PWD) || '';
-const setPwd = (p) => localStorage.setItem(KEY_PWD, p);
-const clearPwd = () => localStorage.removeItem(KEY_PWD);
+
+const getToken  = ()  => localStorage.getItem(KEY_TOKEN) || '';
+const setToken  = (t) => localStorage.setItem(KEY_TOKEN, t);
+const clearToken = () => localStorage.removeItem(KEY_TOKEN);
 
 let toastTimer = null;
 function toast(msg, kind) {
@@ -859,6 +856,7 @@ function showLogin() {
   showGithubCorner();
   setTimeout(() => $('pwdInput').focus(), 100);
 }
+
 function hideLogin() {
   $('loginOverlay').classList.add('hidden');
   $('loginErr').classList.remove('show');
@@ -878,8 +876,13 @@ async function doLogin() {
       body: JSON.stringify({ password: pwd }),
     });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) { setPwd(pwd); await afterLogin(); }
-    else { $('loginErr').textContent = j.error || '密码错误'; $('loginErr').classList.add('show'); }
+    if (r.ok && j.ok && j.token) {
+      setToken(j.token);
+      await afterLogin();
+    } else {
+      $('loginErr').textContent = j.error || '密码错误';
+      $('loginErr').classList.add('show');
+    }
   } catch (e) {
     $('loginErr').textContent = '连接失败: ' + e.message;
     $('loginErr').classList.add('show');
@@ -906,7 +909,13 @@ async function afterLogin() {
 
 $('loginBtn').addEventListener('click', doLogin);
 $('pwdInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-$('logoutBtn').addEventListener('click', () => { clearPwd(); $('initOverlay').classList.add('hidden'); showLogin(); });
+
+$('logoutBtn').addEventListener('click', () => {
+  clearToken();
+  $('initOverlay').classList.add('hidden');
+  showLogin();
+});
+
 $('refreshBtn').addEventListener('click', () => {
   state.hourlyCache = null;
   loadAll();
@@ -935,14 +944,18 @@ $('initBtn').addEventListener('click', async () => {
   }
 });
 
-// API 请求
+// API 请求（携带 JWT token）
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
-  const pwd = getPwd();
-  if (pwd) headers['X-Auth-Token'] = pwd;
+  const token = getToken();
+  if (token) headers['X-Auth-Token'] = token;
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   const r = await fetch('/api' + path, { ...opts, headers });
-  if (r.status === 401) { clearPwd(); showLogin(); throw new Error('登录已失效'); }
+  if (r.status === 401) {
+    clearToken();
+    showLogin();
+    throw new Error('登录已失效，请重新登录');
+  }
   const data = await r.json().catch(() => ({}));
   if (!r.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + r.status));
   return data;
@@ -995,7 +1008,7 @@ function renderStats() {
   seg.appendChild(mkSeg('__total__', '全部'));
   identifiers.forEach(id => {
     let label;
-    if (id === '_panel') label = '管理面板';
+    if (id === '_panel') label = '🟢 管理面板';
     else {
       const item = state.images.find(x => x.identifier === id);
       label = (item && item.name) ? item.name : id;
@@ -1260,7 +1273,7 @@ async function loadLogs() {
     const data = await api('/logs?' + params.toString(), { method: 'GET' });
     state.logTotal = data.total;
     renderLogs(data.items);
-    $('logStatus').textContent  = '共 ' + data.total + ' 条记录';
+    $('logStatus').textContent   = '共 ' + data.total + ' 条记录';
     $('logPageInfo').textContent = '第 ' + data.page + ' / ' + Math.max(1, Math.ceil(data.total / data.pageSize)) + ' 页';
     $('logPrev').disabled = data.page <= 1;
     $('logNext').disabled = data.page * data.pageSize >= data.total;
@@ -1572,15 +1585,15 @@ $('saveBtn').addEventListener('click', async () => {
 // 启动
 (async function init() {
   switchPage(localStorage.getItem(KEY_PAGE) || 'overview');
-  const pwd = getPwd();
-  if (!pwd) { showLogin(); return; }
+  const token = getToken();
+  if (!token) { showLogin(); return; }
   const icon = $('panelIcon');
   if (icon) icon.src = INLINE_ICON;
   try {
     await api('/init', { method: 'GET' });
     await afterLogin();
   } catch (e) {
-    clearPwd(); showLogin();
+    clearToken(); showLogin();
   }
 })();
 </script>
