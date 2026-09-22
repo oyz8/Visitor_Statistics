@@ -510,3 +510,9 @@ MIT
 - [Cloudflare Workers / Pages / D1](https://developers.cloudflare.com/)
 - [Telegram Bot API](https://core.telegram.org/bots/api)
 
+---
+
+## 免责声明
+
+- 本项目仅供学习与技术交流使用，作者不对因使用本项目造成的任何直接或间接损失负责。
+- 项目中涉及的 Cloudflare、GitHub、Telegram 等第三方服务，请遵守其各自的服务条款。
