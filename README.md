@@ -13,9 +13,11 @@
 - 📈 **灵活统计范围** — 概览曲线图支持今天 / 7 天 / 30 天 / 3 个月 / 1 年，支持按标识符筛选
 - 📨 **Telegram 通知** — 实时推送每次有效访问，含完整设备指纹，按钮自动指向当前域名
 - 🎨 **图片管理** — 网页端上传图片到 Git 仓库，自动触发 Pages 部署
+- ⚡ **智能部署** — 只修改名称 / 顺序时不触发部署，保存后立即生效
 - 🔍 **管理面板监控** — 内置 `_panel` 追踪点，记录所有访问登录页的访客
 - 🚫 **反爬虫 / 反测速** — UA 黑名单 + /24 段冷却，避免被刷屏
-- 💾 **纯 D1 存储** — 无每日写入配额困扰
+- 🔐 **安全加固** — 敏感文件拦截 / SVG 沙箱 / 图片魔数校验 / 恒定时间密码比较
+- 💾 **纯 D1 存储** — 免费版 10 万行写/天，约支持 5 万次有效访问，远胜 KV
 
 ---
 
@@ -59,20 +61,23 @@
 
 ## 🔑 变量清单
 
-整个部署需要准备 **7 个环境变量 + 1 个 D1 绑定**，建议先**全部获取完成**，最后一步统一配置。
+整个部署需要准备 **7 个必需环境变量 + 1 个可选环境变量 + 1 个 D1 绑定**，建议先**全部获取完成**，最后一步统一配置。
 
 | # | 变量名 | 类型 | 说明 | 获取位置 |
 |---|---|---|---|---|
-| 1 | `PASSWORD` | 环境变量 | 管理面板登录密码 | 自己设定 |
+| 1 | `PASSWORD` | 环境变量 | 管理面板登录密码（**至少 4 字符**，建议 ≥ 12 位强密码） | 自己设定 |
 | 2 | `GITHUB_TOKEN` | 环境变量 | GitHub PAT | [第 5 步](#5-创建-github-personal-access-token) |
 | 3 | `REPO_NAME` | 环境变量 | 仓库名 `owner/repo` | [第 2 步](#2-使用模板创建自己的仓库) |
 | 4 | `BRANCH` | 环境变量 | 分支名（可选，默认 `main`） | 一般填 `main` |
 | 5 | `CF_DEPLOY_HOOK_URL` | 环境变量 | Pages 部署挂钩 Hook URL  | [第 8 步](#8-创建-deploy-hook) |
 | 6 | `TG_ID` | 环境变量 | Telegram chat_id | [第 4 步](#4-创建-telegram-bot) |
 | 7 | `TG_TOKEN` | 环境变量 | Telegram bot token | [第 4 步](#4-创建-telegram-bot) |
+| — | `JWT_SECRET` | 环境变量（可选） | 独立 JWT 签名密钥（≥ 4 字符）；未设置则用 `PASSWORD` | 自己设定 |
 | — | `DB` | D1 绑定 | 数据库绑定 | [第 3 步](#3-创建-d1-数据库) |
 
 > 💡 Telegram 消息里「👤 管理仪表盘」按钮的地址**无需配置**——Worker 会自动使用本次请求的域名，你在哪个域名访问管理面板，按钮就指向哪个域名。
+>
+> 💡 `JWT_SECRET` 用于将 JWT 签名与登录密码解耦：设置后，更换 `PASSWORD` 不会使已签发 Token 立即失效，反之亦然。仅在需要此解耦时配置。
 
 ---
 
@@ -98,7 +103,7 @@
 4. ⚠️ **记录下仓库名**（格式 `owner/repo`），例如 `你的用户名/visitor-statistics` —— 这就是 `REPO_NAME` 的值。
 5. 点击 **「Create repository」**
 
-新仓库会自动包含 `index.html`、`_worker.js`、`README.md`。
+新仓库会自动包含 `index.html`、`_worker.js`、`_headers`、`README.md`。
 
 > 📝 **记录**：`REPO_NAME = 你的用户名/仓库名`
 
@@ -131,7 +136,7 @@
 3. **Permissions** → **Contents**：**Read and write**
 4. 生成并复制 token（形如 `ghp_xxxxx`）
 
-> ⚠️ 复制时**不要带到尾部换行**。
+> ⚠️ 复制时**不要带到尾部换行或空格**。
 >
 > 📝 **记录**：`GITHUB_TOKEN = ghp_xxxxx`
 
@@ -216,17 +221,18 @@ Dashboard → Pages 项目 → **Settings** → **Functions**：
 
 > ⚠️ 变量名**必须严格为 `DB`**（区分大小写）。
 
-#### 环境变量（7 个）
+#### 环境变量（7 个必需 + 1 个可选）
 
 | 变量名 | 值 |
 |---|---|
-| `PASSWORD` | 自己设定的强密码 |
+| `PASSWORD` | 自己设定的强密码（**至少 4 字符**） |
 | `GITHUB_TOKEN` | 第 5 步的 PAT |
 | `REPO_NAME` | 第 2 步记录的 `owner/repo` |
 | `BRANCH` | `main`（或留空） |
 | `CF_DEPLOY_HOOK_URL` | 第 8 步的 Hook URL |
 | `TG_ID` | 第 4 步的 chat_id |
 | `TG_TOKEN` | 第 4 步的 token |
+| `JWT_SECRET` | **可选**——独立 JWT 密钥，不填则用 `PASSWORD` |
 
 > ⚠️ 粘贴 `GITHUB_TOKEN` 后**不要按回车**，直接保存。
 
@@ -269,7 +275,7 @@ Dashboard → Pages 项目 → **Deployments** → 最新一条 → **Retry depl
 1. 「图片管理」→ 点「＋ 添加一行」
 2. **填写标识符**（例如 `nezha`）—— 决定访问 URL 和 Git 文件名
 3. 点击缩略图或「选择图片」上传任意本地图片（也可直接拖拽）
-4. 一次性可以添加多行
+4. 一次性可以添加多行（单次最多 50 条）
 5. 点「保存并部署」
 
 **系统会**：
@@ -277,6 +283,8 @@ Dashboard → Pages 项目 → **Deployments** → 最新一条 → **Retry depl
 - 自动清理被替换/删除的旧图
 - 自动触发 Pages 部署
 - 30 秒后自动刷新，缩略图显示最新图
+
+> 💡 **只修改名称或顺序时不会触发部署**，保存后立即生效（无需等 30 秒）。
 
 ### 嵌入追踪像素
 
@@ -312,7 +320,10 @@ Dashboard → Pages 项目 → **Deployments** → 最新一条 → **Retry depl
 
 **详细日志页**：
 
-- 按日期 / 标识符 / IP 筛选
+- **所有访问**（含爬虫）都会写入 `visits` 表，字段 `is_bot` 标记是否为爬虫
+- **只有非爬虫访问**才累加 `daily_summary`（用于概览曲线）
+- 默认隐藏爬虫；勾选「显示爬虫」可查看全部记录（爬虫带红色 **BOT** 徽章）
+- 可按日期 / 标识符 / IP 筛选
 - 分页浏览每次访问的完整记录
 
 ### 管理面板访问监控
@@ -338,11 +349,14 @@ Dashboard → Pages 项目 → **Deployments** → 最新一条 → **Retry depl
 
 ### 图片限制
 
-- **单张 ≤ 8 MB**（超过报错）
+- **单张 ≤ 6 MB**（前端直接拦截）；服务端理论上限 8 MB（base64 转码后原始数据）
+- **单次请求体 ≤ 100 MB**（约 12 张 8MB 图片，含 base64 膨胀后）
+- **单次保存 ≤ 50 条**（含新增 + 保留），超过会报错；大批量请分次保存
 - **支持格式**：PNG / JPG / GIF / WebP / SVG
 - **文件名 = 标识符 + 扩展名**：填 `nezha` 上传 PNG → Git 里是 `nezha.png`
 - **标识符规则**：字母、数字、下划线、连字符，长度 1–64
 - **保留标识符**：`_panel`（系统内置）
+- 上传的 SVG 会被强制沙箱化（`CSP: sandbox`），防止 XSS
 
 ### Telegram 通知规则
 
@@ -351,13 +365,15 @@ Dashboard → Pages 项目 → **Deployments** → 最新一条 → **Retry depl
 - **爬虫 UA** 不推送：`bot` / `spider` / `curl` / `itdog` / `boce` 等
 - **测速站 Referer** 不推送：`itdog.cn` / `boce.com` / `17ce.com` 等
 - **「👤 管理仪表盘」按钮地址**自动使用本次请求的域名，无需任何配置
+- 未配置 `TG_TOKEN` / `TG_ID` 时静默跳过推送，不影响统计功能
 
 ### 部署相关
 
 - **Git 自动部署已关闭**——上传图片后必须通过管理面板点「保存并部署」触发
 - **Deploy Hook URL 只创建一次**——如果更换了 Pages 项目，需要重新创建
 - **环境变量改动后**需要 **Retry deployment** 才生效
-- **图片更新后**约 30 秒生效（Pages 构建时间），期间缩略图可能 404
+- **图片内容更新后**约 30 秒生效（Pages 构建时间），期间缩略图可能 404
+- **仅名称/顺序更新**立即生效，无需等待
 
 ### 自定义域名
 
@@ -371,20 +387,29 @@ Dashboard → Pages 项目 → **Deployments** → 最新一条 → **Retry depl
 | 错误信息 | 原因 | 解决 |
 |---|---|---|
 | `未授权` | 密码错误 / 未登录 | 重新登录 |
+| `未配置 JWT_SECRET / PASSWORD` | 环境变量 `PASSWORD` 未设置或长度 < 4 | 在 Pages 设置里配置 `PASSWORD`（≥ 4 字符），然后 Retry deployment |
 | `D1_ERROR: no such table: xxx` | 数据库未初始化 | 登录面板点「创建数据表」 |
 | `Invalid header value` | `GITHUB_TOKEN` 带换行 / 空格 | 重新粘贴，不按回车 |
+| `GITHUB_TOKEN 格式不合法` | Token 前缀不对 | 确认以 `ghp_` / `github_pat_` / `ghs_` / `gho_` / `ghu_` 开头 |
 | `GitHub PUT 401` | PAT 权限不足 / 过期 | 重新生成，勾选 `Contents: Read and write` |
 | `GitHub PUT 404` | `REPO_NAME` 拼写错误 / 仓库不存在 | 检查格式：`用户名/仓库名` |
+| `总条目不能超过 50` | 单次保存超过上限 | 分两次保存 |
+| `图片过大（>6 MB）` | 前端拦截 | 压缩图片或换更小的图 |
+| `文件内容与声明的类型不匹配` | 图片被改名（如 `.jpg` 实为 PNG） | 用真实格式重新上传 |
 | `Hook 4xx / 5xx` | Deploy Hook 失效 | 重新创建 Hook，更新 `CF_DEPLOY_HOOK_URL` |
 | 图片 404 | Pages 未构建完 | 等 30 秒后刷新 |
 | 图片裂图 | Git 里文件路径不对 | 检查 `public/pic/xxx.png` 是否存在 |
 
 ### 安全建议
 
-- **`PASSWORD` 用强密码**，不要与其他服务共用
+- **`PASSWORD` 用强密码**，不要与其他服务共用；**最短 4 字符**，建议 ≥ 12 字符
+- **JWT 有效期 8 小时**，超时需重新登录
 - **PAT 权限最小化**：只给目标仓库的 `Contents: Read and write`
 - **不要公开 `CF_DEPLOY_HOOK_URL`**——任何人拿到可以触发部署
 - **管理面板 URL 不要公开**——虽然需要密码，但登录页本身也会被 `_panel` 追踪
+- 追踪图片仅响应 **GET / HEAD** 请求，其他方法返回 405
+- 上传的 **SVG 会被强制沙箱化**（`CSP: sandbox`），防止 XSS
+- 若使用 4 位弱密码，建议在 Cloudflare 侧开启 **Rate Limiting** 规则限制 `/api/login`
 
 ### 数据备份
 
@@ -424,6 +449,17 @@ const STATS_DAYS = 730;  // 2 年（前提：D1 存得下）
 const PUSH_COOLDOWN_SEC = 300;  // 改成 5 分钟
 ```
 
+### 修改单次保存上限
+
+默认 50 条。修改 `_worker.js` 顶部：
+
+```javascript
+const MAX_ITEMS = 50;           // 单次保存最大条目数
+const UPLOAD_CONCURRENCY = 5;   // GitHub 上传并发数
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;   // 单张图片上限
+const MAX_BODY_BYTES  = 100 * 1024 * 1024; // 请求体上限
+```
+
 ### 添加自定义白名单 / 黑名单
 
 修改 `_worker.js` 里的两个正则：
@@ -431,6 +467,20 @@ const PUSH_COOLDOWN_SEC = 300;  // 改成 5 分钟
 ```javascript
 const BOT_RE = /.../;              // 爬虫 UA 黑名单
 const REFERER_BLOCK_RE = /.../;    // 测速站 Referer 黑名单
+```
+
+### 拦截路径白名单
+
+默认拦截 `README.md`、`_worker.js`、`_headers`、`wrangler.toml`、`.git/` 等敏感路径。如需调整：
+
+```javascript
+const BLOCK_PATHS = new Set([
+  '/README.md', '/readme.md',
+  '/_worker.js', '/_headers', '/_redirects',
+  '/wrangler.toml', '/wrangler.jsonc', '/wrangler.json',
+  '/package.json', '/package-lock.json', '/pnpm-lock.yaml', '/yarn.lock',
+  '/.gitignore', '/.env', '/.env.example',
+]);
 ```
 
 ---
@@ -441,6 +491,7 @@ const REFERER_BLOCK_RE = /.../;    // 测速站 Referer 黑名单
 |---|---|
 | `index.html` | 管理面板前端（登录 + 概览 + 日志 + 图片管理 + 说明） |
 | `_worker.js` | 后端 Worker（API + 图片追踪 + Git 上传 + TG 推送） |
+| `_headers` | 静态资源缓存策略 + 安全响应头 |
 | `README.md` | 本文档 |
 | `public/pic/*` | 图片二进制（由 Worker 自动上传） |
 
@@ -452,7 +503,13 @@ const REFERER_BLOCK_RE = /.../;    // 测速站 Referer 黑名单
 A: Git 自动部署已关闭（见部署流程第 7 步）。进 Dashboard → Pages → Deployments → Retry deployment 手动触发一次。
 
 **Q: 一共需要多少个环境变量？**
-A: **7 个环境变量 + 1 个 D1 绑定**。见 [变量清单](#-变量清单)。
+A: **7 个必需环境变量 + 1 个可选环境变量（`JWT_SECRET`）+ 1 个 D1 绑定**。见 [变量清单](#-变量清单)。
+
+**Q: 密码最短几位？**
+A: **4 字符**。但强烈建议 ≥ 12 位强密码，因为 `/api/login` 默认无限流，4 位密码可被快速爆破。
+
+**Q: `JWT_SECRET` 和 `PASSWORD` 有什么区别？**
+A: `JWT_SECRET` 只用于签发/验证 JWT Token；`PASSWORD` 用于登录验证。如果不设置 `JWT_SECRET`，代码会把 `PASSWORD` 用作 JWT 密钥——此时更换 `PASSWORD` 会使所有已登录的 Token 立即失效。设置独立的 `JWT_SECRET` 可以解耦两者。
 
 **Q: 能不能同时追踪多个站点？**
 A: 能。上传多个图片，每个标识符一个追踪点，独立统计。
@@ -465,6 +522,9 @@ A: GitHub 仓库 ≤ 1 GB 免费，按每张 100 KB 算能存 1 万张。
 
 **Q: 为什么不用 KV？**
 A: KV 免费版每天仅 1000 次写入，冷却标记 / 索引更新很快耗尽。D1 的 10 万写/天更宽裕，且支持关系查询。
+
+**Q: 爬虫会进数据库吗？**
+A: **会**。所有访问都写入 `visits` 表，字段 `is_bot` 标记。只有非爬虫才累加 `daily_summary`（概览曲线）。日志页默认隐藏爬虫，勾选「显示爬虫」可查看。
 
 **Q: 可以部署到 Workers 而非 Pages 吗？**
 A: 可以，但需要自己托管静态资源（如用 R2 或 Workers Sites）。当前方案依赖 Pages 的 `ASSETS` 绑定。
@@ -486,6 +546,9 @@ A: 可以。本项目推荐使用 **Private** 仓库——图片只对你可见�
 
 **Q: 关闭 Git 自动部署后，我改代码怎么办？**
 A: 改完 `git push` 后，去 Dashboard → Pages → Deployments → 最新一条 → **Retry deployment**，或在 Deploy Hook URL 上点一次（GET 请求即可）。
+
+**Q: 只改图片名称也要等 30 秒部署吗？**
+A: **不用**。仅修改名称或顺序时不会触发 Pages 部署，D1 索引更新后立即生效。只有新增/替换/删除图片才需要等待部署。
 
 **Q: 一定要绑定自定义域名吗？**
 A: **不强制**，但**强烈推荐**。原因：
@@ -517,3 +580,4 @@ MIT
 - 本项目仅供学习与技术交流使用，作者不对因使用本项目造成的任何直接或间接损失负责。
 - 项目中涉及的 Cloudflare、GitHub、Telegram 等第三方服务，请遵守其各自的服务条款。
 - 本项目仅供合法用途。严禁用于盗取、非法收集、监控、跟踪或泄露他人信息。使用者应遵守当地法律并取得必要同意；因滥用产生的一切后果由使用者自行承担，与作者无关。
+```
