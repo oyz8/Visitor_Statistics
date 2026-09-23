@@ -1,0 +1,29 @@
+# ============================================================
+# _headers — Cloudflare Pages 响应头配置
+# ============================================================
+
+# ---------- 静态图片（追踪图） ----------
+/public/pic/*
+  Cache-Control: public, max-age=2592000, immutable
+  X-Content-Type-Options: nosniff
+  Access-Control-Allow-Origin: *
+
+# ---------- 其他静态资源 ----------
+/public/*
+  Cache-Control: public, max-age=2592000, immutable
+  X-Content-Type-Options: nosniff
+  Access-Control-Allow-Origin: *
+
+# ---------- 管理面板首页 ----------
+/
+  Cache-Control: no-store, no-cache, must-revalidate
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# ---------- API ----------
+/api/*
+  Cache-Control: no-store, no-cache, must-revalidate
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
